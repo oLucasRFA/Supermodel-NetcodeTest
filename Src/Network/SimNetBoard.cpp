@@ -462,38 +462,45 @@ void CSimNetBoard::RunFrame(void)
 		m_counter++;
 		CommRAM16[0x6] = FLIPENDIAN16(m_counter);
 		
-		// Exchange one segment at a time without blocking the emulation thread.
-		if (!m_waitingForPacket)
-		{
-			nets->Send(CommRAM + 0x100 + m_pendingSegment * m_segmentSize, m_segmentSize);
-			m_waitingForPacket = true;
-			break;
-		}
+		// Exchange segments without blocking the emulation thread.
+		// Process up to 3 segments per frame when the network is fast.
+		const int kMaxSegmentsPerFrame = 3;
+		int segments_processed = 0;
 
-		std::vector<char> recv_data;
-		if (!netr->TryReceive(recv_data))
-			break;
-
-		if (recv_data.empty())
+		while (m_pendingSegment < m_numMachines && segments_processed < kMaxSegmentsPerFrame)
 		{
-			// Link broken - send an empty packet to alert other machines.
-			nets->Send(nullptr, 0);
-			m_state = State::error;
+			if (!m_waitingForPacket)
+			{
+				nets->Send(CommRAM + 0x100 + m_pendingSegment * m_segmentSize, m_segmentSize);
+				m_waitingForPacket = true;
+			}
+
+			std::vector<char> recv_data;
+			if (!netr->TryReceive(recv_data))
+				break;
+
+			if (recv_data.empty())
+			{
+				// Link broken - send an empty packet to alert other machines.
+				nets->Send(nullptr, 0);
+				m_state = State::error;
+				m_waitingForPacket = false;
+				if (m_gameType == GameType::one)
+					m_status1 = 0x40;
+				break;
+			}
+
+			memcpy(CommRAM + 0x100 + (m_pendingSegment + 1) * m_segmentSize,
+				   recv_data.data(), recv_data.size());
+
+			m_pendingSegment++;
 			m_waitingForPacket = false;
-			if (m_gameType == GameType::one)
-				m_status1 = 0x40;
-			break;
+			segments_processed++;
 		}
-
-		memcpy(CommRAM + 0x100 + (m_pendingSegment + 1) * m_segmentSize,
-			recv_data.data(), recv_data.size());
-
-		m_pendingSegment++;
-		m_waitingForPacket = false;
 
 		if (m_pendingSegment < m_numMachines)
 			break;
-        }
+	}
 
 		// Swap CommRAM banks only after all segments have been received.
 		if (m_pendingSegment == m_numMachines)

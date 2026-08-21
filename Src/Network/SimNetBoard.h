@@ -101,6 +101,9 @@ private:
 	uint16_t m_counter = 0;
 
 	uint16_t m_segmentSize = 0;
+	// State for async segment exchange
+	// m_pendingSegment: index of next segment to exchange (0 to m_numMachines-1)
+	// m_waitingForPacket: true if we sent the segment and are waiting for response
 	uint8_t m_pendingSegment = 0;
 	bool m_waitingForPacket = false;
 

@@ -258,6 +258,8 @@ void CSimNetBoard::RunFrame(void)
 			CommRAM16[0xc] = FLIPENDIAN16(0x100);
 			CommRAM16[0xe] = FLIPENDIAN16(RAM16[0x402] - m_segmentSize + 0x200);
 
+			m_pendingSegment = 0;
+			m_waitingForPacket = false;
 			m_state = State::ready;
 		}
 		else
@@ -449,44 +451,67 @@ void CSimNetBoard::RunFrame(void)
 			CommRAM16[0xc] = FLIPENDIAN16(0x100);
 			CommRAM16[0xe] = FLIPENDIAN16(RAM16[0x206] + 0x80);
 
+			m_pendingSegment = 0;
+			m_waitingForPacket = false;
 			m_state = State::ready;
 		}
 		break;
 
 	case State::ready:
+	{
 		m_counter++;
 		CommRAM16[0x6] = FLIPENDIAN16(m_counter);
 		
-		// we only send what we need to; helps cut down on bandwidth
-		// each machine has to receive back its own data (TODO: copy this data manually?)
-		for (int i = 0; i < m_numMachines; i++)
+		// Exchange one segment at a time without blocking the emulation thread.
+		if (!m_waitingForPacket)
 		{
-			nets->Send(CommRAM + 0x100 + i * m_segmentSize, m_segmentSize);
-			auto& recv_data = netr->Receive();
-			if (recv_data.empty())
-			{
-				// link broken - send an "empty" packet to alert other machines
-				nets->Send(nullptr, 0);
-				m_state = State::error;
-				if (m_gameType == GameType::one)
-					m_status1 = 0x40;			// send "link broken" message to mainboard
-				break;
-			}
-			memcpy(CommRAM + 0x100 + (i + 1) * m_segmentSize, recv_data.data(), recv_data.size());
+			nets->Send(CommRAM + 0x100 + m_pendingSegment * m_segmentSize, m_segmentSize);
+			m_waitingForPacket = true;
+			break;
 		}
 
-		// swap CommRAM banks
-		if (m_commbank)
+		std::vector<char> recv_data;
+		if (!netr->TryReceive(recv_data))
+			break;
+
+		if (recv_data.empty())
 		{
-			m_commbank = false;
-			CommRAM = Buffer;
-			externalCommRAM = Buffer + 0x10000;
+			// Link broken - send an empty packet to alert other machines.
+			nets->Send(nullptr, 0);
+			m_state = State::error;
+			m_waitingForPacket = false;
+			if (m_gameType == GameType::one)
+				m_status1 = 0x40;
+			break;
 		}
-		else
+
+		memcpy(CommRAM + 0x100 + (m_pendingSegment + 1) * m_segmentSize,
+			recv_data.data(), recv_data.size());
+
+		m_pendingSegment++;
+		m_waitingForPacket = false;
+
+		if (m_pendingSegment < m_numMachines)
+			break;
+        }
+
+		// Swap CommRAM banks only after all segments have been received.
+		if (m_pendingSegment == m_numMachines)
 		{
-			m_commbank = true;
-			CommRAM = Buffer + 0x10000;
-			externalCommRAM = Buffer;
+			if (m_commbank)
+			{
+				m_commbank = false;
+				CommRAM = Buffer;
+				externalCommRAM = Buffer + 0x10000;
+			}
+			else
+			{
+				m_commbank = true;
+				CommRAM = Buffer + 0x10000;
+				externalCommRAM = Buffer;
+			}
+
+			m_pendingSegment = 0;
 		}
 		
 		break;

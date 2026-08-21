@@ -101,6 +101,8 @@ private:
 	uint16_t m_counter = 0;
 
 	uint16_t m_segmentSize = 0;
+	uint8_t m_pendingSegment = 0;
+	bool m_waitingForPacket = false;
 
 	bool m_attached = false;
 	bool m_running = false;

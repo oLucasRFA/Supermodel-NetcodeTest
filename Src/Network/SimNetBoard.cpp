@@ -1,5 +1,5 @@
 /**
- ** Supermodel
+ * * Supermodel
  ** A Sega Model 3 Arcade Emulator.
  ** Copyright 2011-2020 Bart Trzynadlowski, Nik Henson, Ian Curtis,
  **                     Harry Tuttle, and Spindizzi
@@ -25,7 +25,7 @@
 #include "SimNetBoard.h"
 #include <OSD/Thread.h>
 
- // these make 16-bit read/writes much neater
+// these make 16-bit read/writes much neater
 #define RAM16 *(uint16_t*)&RAM
 #define CommRAM16 *(uint16_t*)&CommRAM
 
@@ -50,7 +50,7 @@ CSimNetBoard::~CSimNetBoard(void)
 
 void CSimNetBoard::SaveState(CBlockFile* SaveState)
 {
-	
+
 }
 
 void CSimNetBoard::LoadState(CBlockFile* SaveState)
@@ -80,6 +80,7 @@ Result CSimNetBoard::Init(uint8_t* netRAMPtr, uint8_t* netBufferPtr)
 		return ErrorLog("Game not recognized or supported");
 
 	m_state = State::start;
+	m_running = true;
 
 	//netsocks
 	port_in = m_config["PortIn"].ValueAs<unsigned>();
@@ -99,435 +100,509 @@ void CSimNetBoard::RunFrame(void)
 
 	switch (m_state)
 	{
-	case State::start:
-		if (!m_connected && !m_connectThread.joinable())
-			m_connectThread = std::thread(&CSimNetBoard::ConnectProc, this);
+		case State::start:
+			if (!m_connected && !m_connectThread.joinable())
+				m_connectThread = std::thread(&CSimNetBoard::ConnectProc, this);
 		m_status0 = 0;
 		m_status1 = IsGame("dirtdvls") ? 0x4004 : 0xe000;
 		m_state = State::init;
 		break;
 
-	case State::init:
-		memset(CommRAM, 0, 0x20000);
-		if (m_gameType == GameType::one)
-		{
-			if (m_status0 & 0x8000)				// has main board changed this register?
+		case State::init:
+			memset(CommRAM, 0, 0x20000);
+			if (m_gameType == GameType::one)
 			{
-				m_IRQ2ack |= 0x01;				// simulate IRQ 2 ack
-				if (m_status0 == 0xf000)
+				if (m_status0 & 0x8000)// has main board changed this register?
 				{
-					// initialization complete
-					m_status1 = 0;
-					CommRAM16[0x72] = FLIPENDIAN16(0x1); // is this necessary?
-					m_state = State::testing;
+					m_IRQ2ack |= 0x01;// simulate IRQ 2 ack
+					if (m_status0 == 0xf000)
+					{
+						// initialization complete
+						m_status1 = 0;
+						CommRAM16[0x72] = FLIPENDIAN16(0x1); // is this necessary?
+						m_state = State::testing;
+					}
+					m_status0 = 0;// 0 should work for all init subroutines
 				}
-				m_status0 = 0;					// 0 should work for all init subroutines
-			}
-		}
-		else
-		{
-			// type 2 performs initialization on its own
-			m_status1 = 0;
-			m_state = State::testing;
-			m_counter = 0;
-		}
-		break;
-
-	case State::testing:
-		if (m_gameType == GameType::one)
-		{
-			m_status0 += 1; // type 1 games require this to be incremented every frame
-
-			if (!m_connected)
-				break;
-
-			uint8_t numMachines, machineIndex;
-
-			if (RAM16[0x400] == 0)	// master
-			{
-				// flush receive buffer
-				while (netr->CheckDataAvailable())
-				{
-					netr->Receive();
-				}
-
-				// check all linked instances have the same GUID
-				nets->Send(&netGUID, sizeof(netGUID));
-				auto& recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-				uint64_t testGUID;
-				memcpy(&testGUID, recv_data.data(), recv_data.size());
-				if (testGUID != netGUID)
-					testGUID = 0;
-
-				// send the GUID for one more loop
-				nets->Send(&testGUID, sizeof(testGUID));
-				netr->Receive();
-				
-				if (testGUID != netGUID)
-				{
-					ErrorLog("unable to verify connection. Make sure all machines are using same build!");
-					m_state = State::error;
-					break;
-				}
-
-				// master has an index of zero
-				machineIndex = 0;
-				nets->Send(&machineIndex, sizeof(machineIndex));
-
-				// receive back the number of other linked machines
-				recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-				numMachines = recv_data[0];
-
-				// send the number of other linked machines
-				nets->Send(&numMachines, sizeof(numMachines));
-				netr->Receive();
 			}
 			else
 			{
-				// receive GUID from the previous machine and check it matches
-				auto& recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-				uint64_t testGUID;
-				memcpy(&testGUID, recv_data.data(), recv_data.size());
-				if (testGUID != netGUID)
-					testGUID = 0;
-				nets->Send(&testGUID, sizeof(testGUID));
-
-				// one more time, in case a later machine has a GUID mismatch
-				recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-				memcpy(&testGUID, recv_data.data(), recv_data.size());
-				if (testGUID != netGUID)
-					testGUID = 0;
-				nets->Send(&testGUID, sizeof(testGUID));
-
-				if (testGUID != netGUID)
-				{
-					ErrorLog("unable to verify connection. Make sure all machines are using same build!");
-					m_state = State::error;
-					break;
-				}
-
-				// receive the previous machine's index, increment it, send it to the next machine
-				recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-				machineIndex = recv_data[0] + 1;
-				nets->Send(&machineIndex, sizeof(machineIndex));
-
-				// receive the number of other linked machines and forward it on
-				recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-				numMachines = recv_data[0];
-				nets->Send(&numMachines, sizeof(numMachines));
+				// type 2 performs initialization on its own
+				m_status1 = 0;
+				m_state = State::testing;
+				m_counter = 0;
 			}
-
-			// if there are no other linked machines, only continue if Supermodel is linked to itself
-			// there might be more than one machine set to master which would cause glitches
-			if ((numMachines == 0) && ((port_in != port_out) || (addr_out != "127.0.0.1")))
-			{
-				ErrorLog("no slave machines detected. Make sure only one machine is set to master!");
-				m_state = State::error;
-				break;
-			}
-
-			m_numMachines = numMachines + 1;
-
-			m_status0 = 0;		// supposed to cycle between 0 and 1 (also 2 for Daytona 2); doesn't seem to matter
-			m_status1 = 0x2021 + (numMachines * 0x20) + machineIndex;
-
-			CommRAM16[0x0] = RAM16[0x400];	// 0 if master, 1 if slave
-			CommRAM16[0x2] = numMachines;
-			CommRAM16[0x4] = machineIndex;
-
-			m_counter = 0;
-			CommRAM16[0x6] = 0;
-
-			m_segmentSize = RAM16[0x404];
-
-			// don't know if these are actually required, but it never hurts to include them
-			CommRAM16[0x8] = FLIPENDIAN16(0x100 + m_segmentSize);
-			CommRAM16[0xa] = FLIPENDIAN16(RAM16[0x402] - m_segmentSize - 1);
-			CommRAM16[0xc] = FLIPENDIAN16(0x100);
-			CommRAM16[0xe] = FLIPENDIAN16(RAM16[0x402] - m_segmentSize + 0x200);
-
-			m_pendingSegment = 0;
-			m_waitingForPacket = false;
-			m_state = State::ready;
-		}
-		else
-		{
-			if (!m_connected)
-				break;
-
-			// we have to track both playable and non-playable machines for type 2
-			struct
-			{
-				uint8_t total;
-				uint8_t playable;
-			} numMachines, machineIndex;
-
-			if (RAM16[0x200] == 0)	// master
-			{
-				// flush receive buffer
-				while (netr->CheckDataAvailable())
-					netr->Receive();
-
-				// check all linked instances have the same GUID
-				nets->Send(&netGUID, sizeof(netGUID));
-				auto& recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-
-				uint64_t testGUID;
-				memcpy(&testGUID, recv_data.data(), recv_data.size());
-				if (testGUID != netGUID)
-					testGUID = 0;
-
-				// send the GUID for one more loop
-				nets->Send(&testGUID, sizeof(testGUID));
-				netr->Receive();
-
-				if (testGUID != netGUID)
-				{
-					ErrorLog("unable to verify connection. Make sure all machines are using same build!");
-					m_state = State::error;
-					break;
-				}
-
-				// master has indices set to zero
-				machineIndex.total = 0; machineIndex.playable = 0;
-				nets->Send(&machineIndex, sizeof(machineIndex));
-
-				// receive back the number of other linked machines
-				recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-				memcpy(&numMachines, recv_data.data(), recv_data.size());
-
-				// send the number of other linked machines
-				nets->Send(&numMachines, sizeof(numMachines));
-				netr->Receive();
-			}
-			else if (RAM16[0x200] < 0x8000)	// slave
-			{
-				// receive GUID from the previous machine and check it matches
-				auto& recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-				uint64_t testGUID;
-				memcpy(&testGUID, recv_data.data(), recv_data.size());
-				if (testGUID != netGUID)
-					testGUID = 0;
-				nets->Send(&testGUID, sizeof(testGUID));
-
-				// one more time, in case a later machine has a GUID mismatch
-				recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-				memcpy(&testGUID, recv_data.data(), recv_data.size());
-				if (testGUID != netGUID)
-					testGUID = 0;
-				nets->Send(&testGUID, sizeof(testGUID));
-
-				if (testGUID != netGUID)
-				{
-					ErrorLog("unable to verify connection. Make sure all machines are using same build!");
-					m_state = State::error;
-					break;
-				}
-
-				// receive the indices of the previous machine and increment them
-				recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-				memcpy(&machineIndex, recv_data.data(), recv_data.size());
-				machineIndex.total++; machineIndex.playable++;
-
-				// send our indices to the next machine
-				nets->Send(&machineIndex, sizeof(machineIndex));
-
-				// receive the number of machines
-				recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-				memcpy(&numMachines, recv_data.data(), recv_data.size());
-
-				// forward the number of machines
-				nets->Send(&numMachines, sizeof(numMachines));
-			}
-			else
-			{
-				// relay/satellite
-				
-				// receive GUID from the previous machine and check it matches
-				auto& recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-				uint64_t testGUID;
-				memcpy(&testGUID, recv_data.data(), recv_data.size());
-				if (testGUID != netGUID)
-					testGUID = 0;
-				nets->Send(&testGUID, sizeof(testGUID));
-
-				// one more time, in case a later machine has a GUID mismatch
-				recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-				memcpy(&testGUID, recv_data.data(), recv_data.size());
-				if (testGUID != netGUID)
-					testGUID = 0;
-				nets->Send(&testGUID, sizeof(testGUID));
-
-				if (testGUID != netGUID)
-				{
-					ErrorLog("unable to verify connection. Make sure all machines are using same build!");
-					m_state = State::error;
-					break;
-				}
-
-				// receive the indices of the previous machine; don't increment the playable index
-				recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-				memcpy(&machineIndex, recv_data.data(), recv_data.size());
-				machineIndex.total++;
-
-				// send our indices to the next machine
-				nets->Send(&machineIndex, sizeof(machineIndex));
-
-				// receive the number of machines
-				recv_data = netr->Receive();
-				if (recv_data.empty())
-					break;
-				memcpy(&numMachines, recv_data.data(), recv_data.size());
-
-				// forward the number of machines
-				nets->Send(&numMachines, sizeof(numMachines));
-
-				// indicate that this machine is a relay/satellite
-				if (!IsGame("dirtdvls"))
-					machineIndex.playable |= 0x80;
-			}
-
-			// if there are no other linked machines, only continue if Supermodel is linked to itself
-			// there might be more than one machine set to master which would cause glitches
-			if ((numMachines.total == 0) && ((port_in != port_out) || (addr_out != "127.0.0.1")))
-			{
-				ErrorLog("no slave machines detected. Make sure only one machine is set to master!");
-				if (IsGame("dirtdvls"))
-					m_status1 = 0x8085;	// seems like the netboard code writers really liked their CPU model numbers
-				m_state = State::error;
-				break;
-			}
-
-			m_numMachines = numMachines.total + 1;
-
-			m_status0 = 5;			// probably not necessary
-			if (IsGame("dirtdvls"))
-				m_status1 = (numMachines.playable << 4) | machineIndex.playable | 0x7400;
-			else
-				m_status1 = (numMachines.playable << 8) | machineIndex.playable;
-
-			CommRAM16[0x0] = RAM16[0x200];	// master/slave/relay status
-			CommRAM16[0x2] = (numMachines.playable << 8) | numMachines.total;
-			CommRAM16[0x4] = (machineIndex.playable << 8) | machineIndex.total;
-
-			m_counter = 0;
-			CommRAM16[0x6] = 0;
-
-			m_segmentSize = RAM16[0x204];
-
-			// don't know if these are actually required, but it never hurts to include them
-			CommRAM16[0x8] = FLIPENDIAN16(0x100 + m_segmentSize);
-			CommRAM16[0xa] = FLIPENDIAN16(RAM16[0x206]);
-			CommRAM16[0xc] = FLIPENDIAN16(0x100);
-			CommRAM16[0xe] = FLIPENDIAN16(RAM16[0x206] + 0x80);
-
-			m_pendingSegment = 0;
-			m_waitingForPacket = false;
-			m_state = State::ready;
-		}
-		break;
-
-	case State::ready:
-	{
-		m_counter++;
-		CommRAM16[0x6] = FLIPENDIAN16(m_counter);
-		
-		// Exchange segments without blocking the emulation thread.
-		// Process up to 3 segments per frame when the network is fast.
-		const int kMaxSegmentsPerFrame = 3;
-		int segments_processed = 0;
-
-		while (m_pendingSegment < m_numMachines && segments_processed < kMaxSegmentsPerFrame)
-		{
-			if (!m_waitingForPacket)
-			{
-				nets->Send(CommRAM + 0x100 + m_pendingSegment * m_segmentSize, m_segmentSize);
-				m_waitingForPacket = true;
-			}
-
-			std::vector<char> recv_data;
-			if (!netr->TryReceive(recv_data))
-				break;
-
-			if (recv_data.empty())
-			{
-				// Link broken - send an empty packet to alert other machines.
-				nets->Send(nullptr, 0);
-				m_state = State::error;
-				m_waitingForPacket = false;
-				if (m_gameType == GameType::one)
-					m_status1 = 0x40;
-				break;
-			}
-
-			memcpy(CommRAM + 0x100 + (m_pendingSegment + 1) * m_segmentSize,
-				   recv_data.data(), recv_data.size());
-
-			m_pendingSegment++;
-			m_waitingForPacket = false;
-			segments_processed++;
-		}
-
-		if (m_pendingSegment < m_numMachines)
 			break;
-	}
 
-		// Swap CommRAM banks only after all segments have been received.
-		if (m_pendingSegment == m_numMachines)
-		{
-			if (m_commbank)
+		case State::testing:
+			if (m_gameType == GameType::one)
 			{
-				m_commbank = false;
-				CommRAM = Buffer;
-				externalCommRAM = Buffer + 0x10000;
+				m_status0 += 1; // type 1 games require this to be incremented every frame
+
+				if (!m_connected)
+					break;
+
+				uint8_t numMachines, machineIndex;
+
+				if (RAM16[0x400] == 0)// master
+				{
+					// flush receive buffer
+					while (netr->CheckDataAvailable())
+					{
+						netr->Receive();
+					}
+
+					// check all linked instances have the same GUID
+					nets->Send(&netGUID, sizeof(netGUID));
+					auto& recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+					uint64_t testGUID;
+					memcpy(&testGUID, recv_data.data(), recv_data.size());
+					if (testGUID != netGUID)
+						testGUID = 0;
+
+					// send the GUID for one more loop
+					nets->Send(&testGUID, sizeof(testGUID));
+					netr->Receive();
+
+					if (testGUID != netGUID)
+					{
+						ErrorLog("unable to verify connection. Make sure all machines are using same build!");
+						m_state = State::error;
+						break;
+					}
+
+					// master has an index of zero
+					machineIndex = 0;
+					nets->Send(&machineIndex, sizeof(machineIndex));
+
+					// receive back the number of other linked machines
+					recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+					numMachines = recv_data[0];
+
+					// send the number of other linked machines
+					nets->Send(&numMachines, sizeof(numMachines));
+					netr->Receive();
+				}
+				else
+				{
+					// receive GUID from the previous machine and check it matches
+					auto& recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+					uint64_t testGUID;
+					memcpy(&testGUID, recv_data.data(), recv_data.size());
+					if (testGUID != netGUID)
+						testGUID = 0;
+					nets->Send(&testGUID, sizeof(testGUID));
+
+					// one more time, in case a later machine has a GUID mismatch
+					recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+					memcpy(&testGUID, recv_data.data(), recv_data.size());
+					if (testGUID != netGUID)
+						testGUID = 0;
+					nets->Send(&testGUID, sizeof(testGUID));
+
+					if (testGUID != netGUID)
+					{
+						ErrorLog("unable to verify connection. Make sure all machines are using same build!");
+						m_state = State::error;
+						break;
+					}
+
+					// receive the previous machine's index, increment it, send it to the next machine
+					recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+					machineIndex = recv_data[0] + 1;
+					nets->Send(&machineIndex, sizeof(machineIndex));
+
+					// receive the number of other linked machines and forward it on
+					recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+					numMachines = recv_data[0];
+					nets->Send(&numMachines, sizeof(numMachines));
+				}
+
+				// if there are no other linked machines, only continue if Supermodel is linked to itself
+				// there might be more than one machine set to master which would cause glitches
+				if ((numMachines == 0) && ((port_in != port_out) || (addr_out != "127.0.0.1")))
+				{
+					ErrorLog("no slave machines detected. Make sure only one machine is set to master!");
+					m_state = State::error;
+					break;
+				}
+
+				m_numMachines = numMachines + 1;
+
+				m_status0 = 0;// supposed to cycle between 0 and 1 (also 2 for Daytona 2); doesn't seem to matter
+				m_status1 = 0x2021 + (numMachines * 0x20) + machineIndex;
+
+				CommRAM16[0x0] = RAM16[0x400];// 0 if master, 1 if slave
+				CommRAM16[0x2] = numMachines;
+				CommRAM16[0x4] = machineIndex;
+
+				m_counter = 0;
+				CommRAM16[0x6] = 0;
+
+				m_segmentSize = RAM16[0x404];
+
+				// don't know if these are actually required, but it never hurts to include them
+				CommRAM16[0x8] = FLIPENDIAN16(0x100 + m_segmentSize);
+				CommRAM16[0xa] = FLIPENDIAN16(RAM16[0x402] - m_segmentSize - 1);
+				CommRAM16[0xc] = FLIPENDIAN16(0x100);
+				CommRAM16[0xe] = FLIPENDIAN16(RAM16[0x402] - m_segmentSize + 0x200);
+
+				m_pendingSegment = 0;
+				m_waitingForPacket = false;
+
+				// Inicializar buffer adaptativo
+				m_bufferDelay = 2;
+				m_writeIndex = 0;
+				m_readIndex = 0;
+				m_frameCount = 0;
+				m_latePacketCount = 0;
+				m_predictedLastFrame = false;
+				memset(m_inputBuffer, 0, sizeof(m_inputBuffer));
+
+				m_state = State::ready;
 			}
 			else
 			{
-				m_commbank = true;
-				CommRAM = Buffer + 0x10000;
-				externalCommRAM = Buffer;
+				if (!m_connected)
+					break;
+
+				// we have to track both playable and non-playable machines for type 2
+				struct
+				{
+					uint8_t total;
+					uint8_t playable;
+				} numMachines, machineIndex;
+
+				if (RAM16[0x200] == 0)// master
+				{
+					// flush receive buffer
+					while (netr->CheckDataAvailable())
+						netr->Receive();
+
+					// check all linked instances have the same GUID
+					nets->Send(&netGUID, sizeof(netGUID));
+					auto& recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+
+					uint64_t testGUID;
+					memcpy(&testGUID, recv_data.data(), recv_data.size());
+					if (testGUID != netGUID)
+						testGUID = 0;
+
+					// send the GUID for one more loop
+					nets->Send(&testGUID, sizeof(testGUID));
+					netr->Receive();
+
+					if (testGUID != netGUID)
+					{
+						ErrorLog("unable to verify connection. Make sure all machines are using same build!");
+						m_state = State::error;
+						break;
+					}
+
+					// master has indices set to zero
+					machineIndex.total = 0; machineIndex.playable = 0;
+					nets->Send(&machineIndex, sizeof(machineIndex));
+
+					// receive back the number of other linked machines
+					recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+					memcpy(&numMachines, recv_data.data(), recv_data.size());
+
+					// send the number of other linked machines
+					nets->Send(&numMachines, sizeof(numMachines));
+					netr->Receive();
+				}
+				else if (RAM16[0x200] < 0x8000)// slave
+				{
+					// receive GUID from the previous machine and check it matches
+					auto& recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+					uint64_t testGUID;
+					memcpy(&testGUID, recv_data.data(), recv_data.size());
+					if (testGUID != netGUID)
+						testGUID = 0;
+					nets->Send(&testGUID, sizeof(testGUID));
+
+					// one more time, in case a later machine has a GUID mismatch
+					recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+					memcpy(&testGUID, recv_data.data(), recv_data.size());
+					if (testGUID != netGUID)
+						testGUID = 0;
+					nets->Send(&testGUID, sizeof(testGUID));
+
+					if (testGUID != netGUID)
+					{
+						ErrorLog("unable to verify connection. Make sure all machines are using same build!");
+						m_state = State::error;
+						break;
+					}
+
+					// receive the indices of the previous machine and increment them
+					recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+					memcpy(&machineIndex, recv_data.data(), recv_data.size());
+					machineIndex.total++; machineIndex.playable++;
+
+					// send our indices to the next machine
+					nets->Send(&machineIndex, sizeof(machineIndex));
+
+					// receive the number of machines
+					recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+					memcpy(&numMachines, recv_data.data(), recv_data.size());
+
+					// forward the number of machines
+					nets->Send(&numMachines, sizeof(numMachines));
+				}
+				else
+				{
+					// relay/satellite
+
+					// receive GUID from the previous machine and check it matches
+					auto& recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+					uint64_t testGUID;
+					memcpy(&testGUID, recv_data.data(), recv_data.size());
+					if (testGUID != netGUID)
+						testGUID = 0;
+					nets->Send(&testGUID, sizeof(testGUID));
+
+					// one more time, in case a later machine has a GUID mismatch
+					recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+					memcpy(&testGUID, recv_data.data(), recv_data.size());
+					if (testGUID != netGUID)
+						testGUID = 0;
+					nets->Send(&testGUID, sizeof(testGUID));
+
+					if (testGUID != netGUID)
+					{
+						ErrorLog("unable to verify connection. Make sure all machines are using same build!");
+						m_state = State::error;
+						break;
+					}
+
+					// receive the indices of the previous machine; don't increment the playable index
+					recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+					memcpy(&machineIndex, recv_data.data(), recv_data.size());
+					machineIndex.total++;
+
+					// send our indices to the next machine
+					nets->Send(&machineIndex, sizeof(machineIndex));
+
+					// receive the number of machines
+					recv_data = netr->Receive();
+					if (recv_data.empty())
+						break;
+					memcpy(&numMachines, recv_data.data(), recv_data.size());
+
+					// forward the number of machines
+					nets->Send(&numMachines, sizeof(numMachines));
+
+					// indicate that this machine is a relay/satellite
+					if (!IsGame("dirtdvls"))
+						machineIndex.playable |= 0x80;
+				}
+
+				// if there are no other linked machines, only continue if Supermodel is linked to itself
+				// there might be more than one machine set to master which would cause glitches
+				if ((numMachines.total == 0) && ((port_in != port_out) || (addr_out != "127.0.0.1")))
+				{
+					ErrorLog("no slave machines detected. Make sure only one machine is set to master!");
+					if (IsGame("dirtdvls"))
+						m_status1 = 0x8085;// seems like the netboard code writers really liked their CPU model numbers
+						m_state = State::error;
+					break;
+				}
+
+				m_numMachines = numMachines.total + 1;
+
+				m_status0 = 5;// probably not necessary
+				if (IsGame("dirtdvls"))
+					m_status1 = (numMachines.playable << 4) | machineIndex.playable | 0x7400;
+				else
+					m_status1 = (numMachines.playable << 8) | machineIndex.playable;
+
+				CommRAM16[0x0] = RAM16[0x200];// master/slave/relay status
+				CommRAM16[0x2] = (numMachines.playable << 8) | numMachines.total;
+				CommRAM16[0x4] = (machineIndex.playable << 8) | machineIndex.total;
+
+				m_counter = 0;
+				CommRAM16[0x6] = 0;
+
+				m_segmentSize = RAM16[0x204];
+
+				// don't know if these are actually required, but it never hurts to include them
+				CommRAM16[0x8] = FLIPENDIAN16(0x100 + m_segmentSize);
+				CommRAM16[0xa] = FLIPENDIAN16(RAM16[0x206]);
+				CommRAM16[0xc] = FLIPENDIAN16(0x100);
+				CommRAM16[0xe] = FLIPENDIAN16(RAM16[0x206] + 0x80);
+
+				m_pendingSegment = 0;
+				m_waitingForPacket = false;
+
+				// Inicializar buffer adaptativo
+				m_bufferDelay = 2;
+				m_writeIndex = 0;
+				m_readIndex = 0;
+				m_frameCount = 0;
+				m_latePacketCount = 0;
+				m_predictedLastFrame = false;
+				memset(m_inputBuffer, 0, sizeof(m_inputBuffer));
+
+				m_state = State::ready;
+			}
+			break;
+
+			case State::ready:
+			{
+				printf("=== State::ready reached! frame=%d ===\n", m_frameCount); m_counter++;
+				m_frameCount++;
+
+				// Ajuste adaptativo do buffer (a cada 60 frames = ~1 segundo)
+				if (m_frameCount % 60 == 0)
+				{
+					if (m_latePacketCount > 5)
+					{
+						// Muitos pacotes atrasados: aumentar buffer
+						m_bufferDelay = std::min(m_bufferDelay + 1, kMaxBufferDelay);
+					}
+					else if (m_latePacketCount == 0 && m_bufferDelay > 1)
+					{
+						// Rede estável: diminuir buffer
+						m_bufferDelay = std::max(m_bufferDelay - 1, 1);
+					}
+					m_latePacketCount = 0;  // reset contador
+				}
+
+				// Troca segmentos sem bloquear
+				const int kMaxSegmentsPerFrame = 3;
+				int segments_processed = 0;
+
+				while (m_pendingSegment < m_numMachines && segments_processed < kMaxSegmentsPerFrame)
+				{
+					if (!m_waitingForPacket)
+					{
+						nets->Send(CommRAM + 0x100 + m_pendingSegment * m_segmentSize, m_segmentSize);
+						m_waitingForPacket = true;
+					}
+
+					// Medir tempo de envio para cálculo de ping
+					auto now = std::chrono::steady_clock::now();
+					static uint64_t last_send_tick = 0;
+
+					std::vector<char> recv_data;
+					if (!netr->TryReceive(recv_data))
+					{
+						// Pacote não chegou ainda - usar predizione
+						m_predictedLastFrame = true;
+						m_latePacketCount++;
+						break;
+					}
+
+					// Calcular ping se recebemos pacote
+					if (last_send_tick > 0)
+					{
+						m_lastPingUs = (now.time_since_epoch().count() - last_send_tick) / 1000;
+						m_avgPingUs = (m_avgPingUs * 59 + m_lastPingUs) / 60;  // média móvel
+					}
+					last_send_tick = now.time_since_epoch().count();
+
+					m_predictedLastFrame = false;
+
+					if (recv_data.empty())
+					{
+						// Link broken - send an empty packet to alert other machines.
+						nets->Send(nullptr, 0);
+						m_state = State::error;
+						m_waitingForPacket = false;
+						if (m_gameType == GameType::one)
+							m_status1 = 0x40;
+						break;
+					}
+
+					memcpy(CommRAM + 0x100 + (m_pendingSegment + 1) * m_segmentSize,
+						   recv_data.data(), recv_data.size());
+
+					m_pendingSegment++;
+					m_waitingForPacket = false;
+					segments_processed++;
+				}
+
+				if (m_pendingSegment < m_numMachines)
+				{
+					// Não recebeu todos - usar buffer com predizione
+					// Rollback: copiar frame anterior do buffer
+					int prevIndex = (m_writeIndex - 1 + kMaxBufferDelay) % kMaxBufferDelay;
+					memcpy(CommRAM, m_inputBuffer[prevIndex], 0x20000);
+					break;
+				}
+
+				// Recebeu todos os segmentos - salvar no buffer
+				memcpy(m_inputBuffer[m_writeIndex], CommRAM, 0x20000);
+				m_writeIndex = (m_writeIndex + 1) % m_bufferDelay;
+
+				// Calcular índice de leitura com atraso
+				m_readIndex = (m_writeIndex - m_bufferDelay + kMaxBufferDelay) % kMaxBufferDelay;
+
+				// Swap CommRAM banks
+				if (m_commbank)
+				{
+					m_commbank = false;
+					CommRAM = Buffer;
+					externalCommRAM = Buffer + 0x10000;
+				}
+				else
+				{
+					m_commbank = true;
+					CommRAM = Buffer + 0x10000;
+					externalCommRAM = Buffer;
+				}
+
+				// Logging de métricas a cada 60 frames (~1 segundo)
+				static uint32_t log_counter = 0;
+				log_counter++;
+				if (log_counter % 60 == 0)
+				{
+                                printf("[NetMetrics] ping_ms=%.1f avg_ms=%.1f buffer_delay=%d late_packets=%d predicted=%d\n", m_lastPingUs / 1000.0, m_avgPingUs / 1000.0, m_bufferDelay, m_latePacketCount, m_predictedLastFrame ? 1 : 0);
+					ErrorLog("[NetMetrics] ping_ms=%.1f avg_ms=%.1f buffer_delay=%d late_packets=%d predicted=%d",
+							 m_lastPingUs / 1000.0, m_avgPingUs / 1000.0, m_bufferDelay, m_latePacketCount, m_predictedLastFrame ? 1 : 0);
+				}
+
+				m_pendingSegment = 0;
+
+				break;
 			}
 
-			m_pendingSegment = 0;
-		}
-		
-		break;
-
-	case State::error:
-		// do nothing
-		break;
-	}
-}
+			case State::error:
+				// do nothing
+				break;
+	}  // fim do switch (m_state)
+}  // fim da função RunFrame()
 
 void CSimNetBoard::Reset(void)
 {
@@ -539,7 +614,9 @@ void CSimNetBoard::Reset(void)
 	}
 
 	m_running = false;
-	m_state = State::start;
+	// NAO resetar para State::start para nao fechar a conexao TCP
+	// Manter em State::testing para re-inicializar rapidamente
+	m_state = State::testing;
 }
 
 bool CSimNetBoard::IsAttached(void)
@@ -586,32 +663,32 @@ void CSimNetBoard::ConnectProc(void)
 
 uint8_t CSimNetBoard::ReadCommRAM8(unsigned addr)
 {
-	return externalCommRAM[addr];
+	return m_inputBuffer[m_readIndex][addr];
 }
 
 uint16_t CSimNetBoard::ReadCommRAM16(unsigned addr)
 {
-	return *(uint16_t*)&externalCommRAM[addr];
+	return *(uint16_t*)&m_inputBuffer[m_readIndex][addr];
 }
 
 uint32_t CSimNetBoard::ReadCommRAM32(unsigned addr)
 {
-	return *(uint32_t*)&externalCommRAM[addr];
+	return *(uint32_t*)&m_inputBuffer[m_readIndex][addr];
 }
 
 void CSimNetBoard::WriteCommRAM8(unsigned addr, uint8_t data)
 {
-	externalCommRAM[addr] = data;
+	m_inputBuffer[m_writeIndex][addr] = data;
 }
 
 void CSimNetBoard::WriteCommRAM16(unsigned addr, uint16_t data)
 {
-	*(uint16_t*)&externalCommRAM[addr] = data;
+	*(uint16_t*)&m_inputBuffer[m_writeIndex][addr] = data;
 }
 
 void CSimNetBoard::WriteCommRAM32(unsigned addr, uint32_t data)
 {
-	*(uint32_t*)&externalCommRAM[addr] = data;
+	*(uint32_t*)&m_inputBuffer[m_writeIndex][addr] = data;
 }
 
 uint16_t CSimNetBoard::ReadIORegister(unsigned reg)
@@ -621,15 +698,15 @@ uint16_t CSimNetBoard::ReadIORegister(unsigned reg)
 
 	switch (reg)
 	{
-	case 0x00:
-		return m_IRQ2ack;
-	case 0x88:
-		return m_status0;
-	case 0x8a:
-		return m_status1;
-	default:
-		ErrorLog("read from unknown IO register 0x%02x", reg);
-		return 0;
+		case 0x00:
+			return m_IRQ2ack;
+		case 0x88:
+			return m_status0;
+		case 0x8a:
+			return m_status1;
+		default:
+			ErrorLog("read from unknown IO register 0x%02x", reg);
+			return 0;
 	}
 }
 
@@ -637,21 +714,21 @@ void CSimNetBoard::WriteIORegister(unsigned reg, uint16_t data)
 {
 	switch (reg)
 	{
-	case 0x00:
-		m_IRQ2ack = data;
-		break;
-	case 0x88:
-		m_status0 = data;
-		break;
-	case 0x8a:
-		m_status1 = data;
-		break;
-	case 0xc0:
-		if (data == 0)
-			Reset();
+		case 0x00:
+			m_IRQ2ack = data;
+			break;
+		case 0x88:
+			m_status0 = data;
+			break;
+		case 0x8a:
+			m_status1 = data;
+			break;
+		case 0xc0:
+			if (data == 0)
+				Reset();
 		m_running = (data != 0);
 		break;
-	default:
-		ErrorLog("write to unknown IO register 0x%02x", reg);
+		default:
+			ErrorLog("write to unknown IO register 0x%02x", reg);
 	}
 }

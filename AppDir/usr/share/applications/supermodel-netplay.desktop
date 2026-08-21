@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Supermodel Netplay Test
+Comment=Sega Model 3 emulator with integrated GUI and experimental NetBoard
+Exec=supermodel
+Icon=supermodel-netplay
+Categories=Game;Emulator;
+Terminal=false
+StartupNotify=true

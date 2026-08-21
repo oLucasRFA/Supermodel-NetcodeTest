@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+HERE="$(dirname "$(readlink -f "$0")")"
+
+if [ -n "${APPIMAGE:-}" ]; then
+  DATA_DIR="$(dirname "$APPIMAGE")/Supermodel-Netplay-data"
+else
+  DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/Supermodel-Netplay"
+fi
+
+mkdir -p \
+  "$DATA_DIR/Config" \
+  "$DATA_DIR/NVRAM" \
+  "$DATA_DIR/Saves" \
+  "$DATA_DIR/ROMs"
+
+if [ ! -f "$DATA_DIR/Config/Games.xml" ]; then
+  cp -a "$HERE/Config/." "$DATA_DIR/Config/"
+fi
+
+export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+cd "$DATA_DIR"
+exec "$HERE/usr/bin/supermodel" "$@"

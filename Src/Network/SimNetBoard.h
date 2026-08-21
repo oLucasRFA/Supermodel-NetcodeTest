@@ -100,12 +100,23 @@ private:
 	uint8_t m_numMachines = 0;
 	uint16_t m_counter = 0;
 
+	// Métricas para overlay
+	uint32_t m_lastPingUs = 0;  // último ping medido
+	uint32_t m_avgPingUs = 0;   // média de ping
+
 	uint16_t m_segmentSize = 0;
-	// State for async segment exchange
-	// m_pendingSegment: index of next segment to exchange (0 to m_numMachines-1)
-	// m_waitingForPacket: true if we sent the segment and are waiting for response
 	uint8_t m_pendingSegment = 0;
 	bool m_waitingForPacket = false;
+
+	// Buffer adaptativo com predição e rollback
+	static const int kMaxBufferDelay = 8;  // buffer máximo de 8 frames
+	int m_bufferDelay = 2;  // atraso atual em frames (adaptativo)
+	uint8_t m_inputBuffer[kMaxBufferDelay][0x20000];  // buffer circular de CommRAM
+	int m_writeIndex = 0;  // índice de escrita
+	int m_readIndex = 0;   // índice de leitura (atrasado)
+	uint32_t m_frameCount = 0;  // contador de frames para ajuste adaptativo
+	int m_latePacketCount = 0;  // pacotes atrasados no último segundo
+	bool m_predictedLastFrame = false;  // se usou predição no último frame
 
 	bool m_attached = false;
 	bool m_running = false;

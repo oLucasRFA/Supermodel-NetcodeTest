@@ -1,53 +1,56 @@
 /**
- ** Supermodel
+ * * Supermodel
  ** A Sega Model 3 Arcade Emulator.
- ** Copyright 2011-2020 Bart Trzynadlowski, Nik Henson, Ian Curtis,
- **                     Harry Tuttle, and Spindizzi
- **
- ** This file is part of Supermodel.
- **
- ** Supermodel is free software: you can redistribute it and/or modify it under
- ** the terms of the GNU General Public License as published by the Free
- ** Software Foundation, either version 3 of the License, or (at your option)
- ** any later version.
- **
- ** Supermodel is distributed in the hope that it will be useful, but WITHOUT
- ** ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- ** FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- ** more details.
- **
- ** You should have received a copy of the GNU General Public License along
- ** with Supermodel.  If not, see <http://www.gnu.org/licenses/>.
  **/
 
-#ifndef _TCPRECEIVE_H_
-#define _TCPRECEIVE_H_
+#ifndef INCLUDED_TCP_RECEIVE_H
+#define INCLUDED_TCP_RECEIVE_H
 
-#include <thread>
 #include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <deque>
+#include <mutex>
+#include <thread>
 #include <vector>
+
 #include "SDLIncludes.h"
 
 class TCPReceive
 {
 public:
-	TCPReceive(int port);
+	explicit TCPReceive(int port);
 	~TCPReceive();
 
-	bool CheckDataAvailable(int timeoutMS = 0);		// timeoutMS -1 = wait forever until data arrives, 0 = no waiting, 1+ wait time in milliseconds
+	bool CheckDataAvailable(int timeoutMS = 0);
+
+	// Compatibilidade com o fluxo legado: bloqueia até obter um pacote.
 	std::vector<char>& Receive();
+
+	// Nova API: nunca bloqueia. Retorna false se não houver pacote completo.
+	bool TryReceive(std::vector<char>& packet);
+
 	bool Connected();
 
 private:
-
 	void ListenFunc();
+	void ReceiveFunc();
 
-	TCPsocket m_listenSocket;
+	std::atomic<TCPsocket> m_listenSocket;
 	std::atomic<TCPsocket> m_receiveSocket;
 	SDLNet_SocketSet m_socketSet;
+
 	std::thread m_listenThread;
-	std::atomic_bool m_running;
+	std::thread m_receiveThread;
+
+	std::atomic<bool> m_running;
+	std::atomic<bool> m_disconnected;
+
+	std::mutex m_queueMutex;
+	std::condition_variable m_queueCV;
+	std::deque<std::vector<char>> m_packets;
+
 	std::vector<char> m_recBuffer;
 };
 
-#endif
+#endif  // INCLUDED_TCP_RECEIVE_H

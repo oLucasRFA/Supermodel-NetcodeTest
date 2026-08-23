@@ -174,6 +174,8 @@ SRC_FILES = \
 	Src/Network/TCPReceive.cpp \
 	Src/Network/TCPSend.cpp \
 	Src/Network/NetBoard.cpp \
+	Src/Network/NetFrame.cpp \
+	Src/Network/NetInputBuffer.cpp \
 	Src/Network/SimNetBoard.cpp \
 	$(PLATFORM_SRC_FILES)
 

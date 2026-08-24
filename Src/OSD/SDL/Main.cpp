@@ -106,6 +106,7 @@
 #include "Crosshair.h"
 #include "OSD/DefaultConfigFile.h"
 #include "Gui.h"
+#include "Network/NetHUD.h"
 
 
 /******************************************************************************
@@ -1052,6 +1053,12 @@ int Supermodel(const Game &game, ROMSet *rom_set, IEmulator *Model3, CInputs *In
 #endif
   while (!quit)
   {
+		// --- HUD de netplay na barra de titulo (ping + delays) ---
+		if (s_runtime_config["Network"].ValueAs<bool>() && NetHUD::ShouldUpdate(0.25))
+		{
+			std::string netTitle = NetHUD::ComposeTitle(baseTitleStr);
+			SDL_SetWindowTitle(s_window, netTitle.c_str());
+		}
     // Poll the inputs
     if (!Inputs->Poll(&game, xOffset, yOffset, xRes, yRes))
       quit = true;

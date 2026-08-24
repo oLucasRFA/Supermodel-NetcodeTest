@@ -110,9 +110,10 @@ private:
 	uint8_t m_numMachines = 0;
 	uint16_t m_counter = 0;
 
-	// Métricas para overlay
+		// Métricas para overlay
 	uint32_t m_lastPingUs = 0;
 	uint32_t m_avgPingUs = 0;
+	uint64_t m_segmentSendUs = 0;   // timestamp do envio do segmento (p/ RTT)
 
 	// CommRAM
 	uint16_t m_segmentSize = 0;

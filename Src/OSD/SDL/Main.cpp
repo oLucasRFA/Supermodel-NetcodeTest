@@ -1056,7 +1056,7 @@ int Supermodel(const Game &game, ROMSet *rom_set, IEmulator *Model3, CInputs *In
 		// --- HUD de netplay na barra de titulo (ping + delays) ---
 		if (s_runtime_config["Network"].ValueAs<bool>() && NetHUD::ShouldUpdate(0.25))
 		{
-			std::string netTitle = NetHUD::ComposeTitle(baseTitleStr);
+			std::string netTitle = NetHUD::ComposeTitle(baseTitleStr, false);
 			SDL_SetWindowTitle(s_window, netTitle.c_str());
 		}
     // Poll the inputs

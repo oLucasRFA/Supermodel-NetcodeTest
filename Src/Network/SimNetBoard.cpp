@@ -31,6 +31,7 @@
 #include "Supermodel.h"
 #include "SimNetBoard.h"
 #include "NetFrame.h"
+#include "NetMetrics.h"
 
 #include <OSD/Thread.h>
 
@@ -39,6 +40,13 @@
 #define CommRAM16 *(uint16_t*)&CommRAM
 
 static const uint64_t netGUID = 0x5bf177da34872;
+
+static inline uint64_t NowMicros()
+{
+	using namespace std::chrono;
+	return (uint64_t)duration_cast<microseconds>(
+		steady_clock::now().time_since_epoch()).count();
+}
 
 inline bool CSimNetBoard::IsGame(const char* gameName)
 {
@@ -805,6 +813,10 @@ void CSimNetBoard::RunFrame(void)
 			m_simulationFrame++;
 			m_counter++;
 
+			// HUD: reporta o input delay atual do buffer adaptativo
+			NetMetrics::Get().SetInputDelayFrames(
+				(int)m_remoteInputBuffer.GetDelayFrames());
+
 			/*
 			 * A network exchange can span multiple emulation frames.
 			 * Therefore the network frame is assigned only when starting
@@ -860,6 +872,7 @@ void CSimNetBoard::RunFrame(void)
 						break;
 					}
 
+					m_segmentSendUs = NowMicros();
 					nets->Send(
 						packet.data(),
 							   packet.size()
@@ -995,8 +1008,25 @@ void CSimNetBoard::RunFrame(void)
 		   header.payloadSize
 				);
 
-				m_predictedLastFrame = false;
+								m_predictedLastFrame = false;
 				m_waitingForPacket = false;
+
+				// HUD: RTT medido do proprio round-trip do segmento
+				if (m_segmentSendUs != 0)
+				{
+					const uint64_t nowUs = NowMicros();
+					if (nowUs >= m_segmentSendUs)
+					{
+						const uint32_t rttUs = (uint32_t)(nowUs - m_segmentSendUs);
+						m_lastPingUs = rttUs;
+						m_avgPingUs = (m_avgPingUs == 0)
+							? rttUs
+							: (uint32_t)((m_avgPingUs * 7 + rttUs) / 8); // EMA ~1/8
+						NetMetrics::Get().UpdatePingSample(rttUs / 1000.0);
+						NetMetrics::Get().SetConnected(true);
+					}
+					m_segmentSendUs = 0;
+				}
 
 				m_pendingSegment++;
 				segmentsProcessed++;
@@ -1341,6 +1371,7 @@ void CSimNetBoard::ConnectProc(void)
 	printf("Successfully connected.\n");
 
 	m_connected = true;
+	NetMetrics::Get().SetConnected(true);
 }
 
 void CSimNetBoard::ProcessNetworkPackets(void)

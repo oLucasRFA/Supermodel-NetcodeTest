@@ -1051,7 +1051,7 @@ int Supermodel(const Game &game, ROMSet *rom_set, IEmulator *Model3, CInputs *In
     quit = true;
   }
 #endif
-  while (!quit)
+    while (!quit)
   {
 		// --- HUD de netplay na barra de titulo (ping + delays) ---
 		if (s_runtime_config["Network"].ValueAs<bool>() && NetHUD::ShouldUpdate(0.25))
@@ -1059,9 +1059,21 @@ int Supermodel(const Game &game, ROMSet *rom_set, IEmulator *Model3, CInputs *In
 			std::string netTitle = NetHUD::ComposeTitle(baseTitleStr, false);
 			SDL_SetWindowTitle(s_window, netTitle.c_str());
 		}
+
+		// --- SMOKE TEST rollback: mede 1 snapshot em memoria (REMOVER depois) ---
+		static bool s_rbTested = false;
+		if (!s_rbTested && s_runtime_config["Network"].ValueAs<bool>())
+		{
+			std::vector<uint8_t> snap;
+			static_cast<CModel3*>(Model3)->SaveStateToMemory(snap);
+			printf("[RB test] snapshot = %zu bytes\n", snap.size());
+			s_rbTested = true;
+		}
+
     // Poll the inputs
     if (!Inputs->Poll(&game, xOffset, yOffset, xRes, yRes))
       quit = true;
+
 
     // Render if paused, otherwise run a frame
     if (paused)
